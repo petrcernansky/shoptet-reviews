@@ -1,0 +1,84 @@
+name: Update Reviews from Google Sheets
+
+on:
+ schedule:
+   - cron: '0 * * * *'  # každou hodinu
+ workflow_dispatch:  # můžeš spustit ručně
+
+jobs:
+ update-reviews:
+   runs-on: ubuntu-latest
+   
+   steps:
+   - name: Checkout code
+     uses: actions/checkout@v3
+   
+   - name: Set up Python
+     uses: actions/setup-python@v4
+     with:
+       python-version: '3.9'
+   
+   - name: Install dependencies
+     run: |
+       pip install gspread paramiko
+   
+   - name: Update reviews
+     env:
+       FTP_HOST: ${{ secrets.FTP_HOST }}
+       FTP_USER: ${{ secrets.FTP_USER }}
+       FTP_PASS: ${{ secrets.FTP_PASS }}
+     run: |
+       python -c "
+       import gspread
+       import json
+       import paramiko
+       import os
+       from io import StringIO
+       
+       # Připoj k Google Sheets (veřejná tabulka)
+       gc = gspread.service_account_from_dict({
+           'type': 'service_account',
+           'project_id': 'dummy',
+           'private_key_id': 'dummy',
+           'private_key': 'dummy',
+           'client_email': 'dummy',
+           'client_id': 'dummy',
+           'auth_uri': 'https://accounts.google.com/o/oauth2/auth',
+           'token_uri': 'https://oauth2.googleapis.com/token'
+       })
+       
+       # Použij veřejný přístup
+       import requests
+       url = 'https://docs.google.com/spreadsheets/d/1hSh2BKVrsvXBpVF4Z5fFoXH2H0vJAqDlqdchDbSz-nk/export?format=csv&gid=0'
+       response = requests.get(url)
+       
+       lines = response.text.strip().split('\n')
+       reviews = []
+       
+       for line in lines[1:]:  # přeskoč hlavičku
+           parts = line.split(',')
+           if len(parts) >= 5 and parts[0]:
+               reviews.append({
+                   'code': parts[0].strip('\"'),
+                   'stars': int(parts[1]) if parts[1].isdigit() else 0,
+                   'name': parts[2].strip('\"'),
+                   'source': parts[3].strip('\"'),
+                   'review': parts[4].strip('\"')
+               })
+       
+       json_data = json.dumps(reviews, indent=2, ensure_ascii=False)
+       
+       # Upload přes SFTP
+       ssh = paramiko.SSHClient()
+       ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+       ssh.connect(os.environ['FTP_HOST'], port=22, username=os.environ['FTP_USER'], password=os.environ['FTP_PASS'])
+       
+       sftp = ssh.open_sftp()
+       with sftp.file('recen.js', 'w') as f:
+           f.write(json_data)
+       
+       sftp.close()
+       ssh.close()
+       
+       print(f'Aktualizováno {len(reviews)} recenzí')
+       "
